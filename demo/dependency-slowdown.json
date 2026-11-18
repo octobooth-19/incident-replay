@@ -1,0 +1,75 @@
+{
+  "events": [
+    {
+      "id": "search-baseline",
+      "ts": "2026-05-03T08:14:10Z",
+      "source": "log",
+      "service": "search-api",
+      "severity": "info",
+      "ref": "demo/search.log:1",
+      "text": "Search request completed."
+    },
+    {
+      "id": "index-warning",
+      "ts": "2026-05-03T08:15:05Z",
+      "source": "alert",
+      "service": "index-store",
+      "severity": "warn",
+      "ref": "demo/index-alert:1",
+      "text": "Index-store latency exceeded the demo threshold."
+    },
+    {
+      "id": "search-timeout",
+      "ts": "2026-05-03T08:15:20Z",
+      "source": "log",
+      "service": "search-api",
+      "severity": "error",
+      "signature": "index-timeout",
+      "trace_id": "demo-search-trace",
+      "ref": "demo/search.log:2",
+      "text": "Search timed out while waiting for the index store."
+    },
+    {
+      "id": "index-recovery",
+      "ts": "2026-05-03T08:19:00Z",
+      "source": "alert",
+      "service": "index-store",
+      "severity": "info",
+      "ref": "demo/index-alert:2",
+      "text": "Index-store latency returned below the demo threshold."
+    }
+  ],
+  "analysis": {
+    "hypotheses": [
+      {
+        "id": "slow-index",
+        "summary": "Index-store latency may have contributed to search timeouts.",
+        "confidence": 0.6,
+        "evidence_ids": ["index-warning", "search-timeout"],
+        "unverified_assumptions": ["The observed latency affected the timed-out request."],
+        "suspect_files": []
+      }
+    ],
+    "timeline": [
+      {
+        "ts": "2026-05-03T08:15:05Z",
+        "summary": "Index-store latency increased.",
+        "evidence_ids": ["index-warning"]
+      },
+      {
+        "ts": "2026-05-03T08:15:20Z",
+        "summary": "A search request timed out.",
+        "evidence_ids": ["search-timeout"]
+      },
+      {
+        "ts": "2026-05-03T08:19:00Z",
+        "summary": "The latency alert recovered.",
+        "evidence_ids": ["index-recovery"]
+      }
+    ]
+  },
+  "redactionReport": {
+    "total": 0,
+    "counts": { "aws": 0, "github": 0, "secret": 0, "email": 0, "ip": 0, "card": 0, "entropy": 0 }
+  }
+}

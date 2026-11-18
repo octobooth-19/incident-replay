@@ -259,6 +259,18 @@ references or paths tracked at the current Git commit (`path:line` and `path#Lli
 are supported). Unrecognized refs, including local-only paths, remain text. Omit
 `owner/repo` to render without links.
 
+The `demo/` directory also contains standalone fictional inputs:
+`deployment-regression.json` demonstrates deployment correlation,
+`dependency-slowdown.json` shows a dependency alert and timeout, and
+`feature-flag-rollback.json` follows a flag change and recovery. For example:
+
+```sh
+node src/generate-replay.cjs demo/deployment-regression.json /tmp/catalog-replay
+```
+
+These inputs contain no real incident data; their references and file paths are
+fictional and are not intended to link to repository files.
+
 Replace `--demo` with a local input JSON file for a real replay. Its
 `events` must already be redacted, `redactionReport` is the collector's
 `{ total, counts }` (sum corresponding categories when combining collectors),

@@ -1,0 +1,88 @@
+{
+  "events": [
+    {
+      "id": "catalog-baseline",
+      "ts": "2026-04-15T10:00:10Z",
+      "source": "log",
+      "service": "catalog-api",
+      "severity": "info",
+      "ref": "demo/catalog.log:1",
+      "text": "Catalog request completed."
+    },
+    {
+      "id": "catalog-commit",
+      "ts": "2026-04-15T10:00:20Z",
+      "source": "commit",
+      "service": "catalog-api",
+      "severity": "info",
+      "ref": "demo/catalog-change:1",
+      "text": "A catalog parser change was recorded."
+    },
+    {
+      "id": "catalog-deploy",
+      "ts": "2026-04-15T10:00:40Z",
+      "source": "deploy",
+      "service": "catalog-api",
+      "severity": "info",
+      "ref": "demo/catalog-deploy:1",
+      "text": "The catalog release was deployed."
+    },
+    {
+      "id": "catalog-error",
+      "ts": "2026-04-15T10:01:05Z",
+      "source": "log",
+      "service": "catalog-api",
+      "severity": "error",
+      "signature": "catalog-parse-error",
+      "trace_id": "demo-catalog-trace",
+      "ref": "demo/catalog.log:2",
+      "text": "Catalog parsing failed.\n    at parse (services/catalog/parser.js:12:3)"
+    },
+    {
+      "id": "catalog-alert",
+      "ts": "2026-04-15T10:01:30Z",
+      "source": "alert",
+      "service": "catalog-api",
+      "severity": "critical",
+      "ref": "demo/catalog-alert:1",
+      "text": "Catalog error rate exceeded the demo threshold."
+    }
+  ],
+  "correlation": {
+    "deploymentChanges": [
+      {
+        "deploymentId": "catalog-deploy",
+        "commitId": "catalog-commit",
+        "files": ["services/catalog/parser.js"]
+      }
+    ]
+  },
+  "analysis": {
+    "hypotheses": [
+      {
+        "id": "parser-regression",
+        "summary": "The parser change may be related to the catalog errors.",
+        "confidence": 0.7,
+        "evidence_ids": ["catalog-deploy", "catalog-error"],
+        "unverified_assumptions": ["The deployed parser change caused the errors."],
+        "suspect_files": []
+      }
+    ],
+    "timeline": [
+      {
+        "ts": "2026-04-15T10:00:40Z",
+        "summary": "The catalog release was deployed.",
+        "evidence_ids": ["catalog-deploy"]
+      },
+      {
+        "ts": "2026-04-15T10:01:05Z",
+        "summary": "Catalog parsing errors appeared.",
+        "evidence_ids": ["catalog-error"]
+      }
+    ]
+  },
+  "redactionReport": {
+    "total": 0,
+    "counts": { "aws": 0, "github": 0, "secret": 0, "email": 0, "ip": 0, "card": 0, "entropy": 0 }
+  }
+}
