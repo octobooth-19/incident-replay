@@ -4,6 +4,7 @@ const { execFileSync } = require('node:child_process');
 const { readFileSync, mkdirSync, writeFileSync, existsSync } = require('node:fs');
 const { join } = require('node:path');
 const { buildReplay, renderIssueComment, validRepo } = require('./report.cjs');
+const { buildDemoInput } = require('./demo.cjs');
 
 const root = join(__dirname, '..');
 const demo = join(root, 'fixtures/analysis/checkout.input.json');
@@ -34,10 +35,8 @@ function workflowInput(eventName, event, incidentDir) {
   throw new Error('No reviewed input for this private issue');
 }
 
-function generate(inputPath, outputDir, repo) {
+function writeBundle(input, outputDir, repo) {
   if (repo !== undefined && !validRepo(repo)) throw new Error('Expected GitHub repository as owner/name');
-  const input = readJSON(inputPath);
-  if (inputPath === demo) input.analysis = readJSON(join(root, 'fixtures/analysis/checkout.response.json'));
   const replay = buildReplay(input);
   const json = `${JSON.stringify(replay, null, 2)}\n`;
   if (Buffer.byteLength(json) > maxBytes) throw new Error('Replay bundle exceeds 5 MiB');
@@ -63,23 +62,32 @@ function generate(inputPath, outputDir, repo) {
   writeFileSync(join(outputDir, 'issue-comment.md'), comment, { mode: 0o600 });
 }
 
+function generate(inputPath, outputDir, repo) {
+  return writeBundle(readJSON(inputPath), outputDir, repo);
+}
+
+async function generateDemo(outputDir, repo) {
+  return writeBundle(await buildDemoInput(), outputDir, repo);
+}
+
 function main([input, output, repo], env = process.env) {
   if (!input || !output) throw new Error('Usage: node src/generate-replay.cjs <input.json|--demo|--workflow> <output-dir> [owner/repo]');
   const path = input === '--workflow'
     ? workflowInput(env.GITHUB_EVENT_NAME, readJSON(env.GITHUB_EVENT_PATH), join(root, 'incidents'))
     : input === '--demo' ? demo : input;
-  generate(path, output, repo);
-  console.log(path === demo ? 'Generated fictional demo replay.' : 'Generated replay from reviewed input.');
+  const generated = path === demo ? generateDemo(output, repo) : generate(path, output, repo);
+  return Promise.resolve(generated).then(() => {
+    console.log(path === demo ? 'Generated fictional demo replay.' : 'Generated replay from reviewed input.');
+  });
 }
 
 if (require.main === module) {
-  try {
-    main(process.argv.slice(2));
-  } catch {
-    // Filesystem and JSON parser errors can contain private paths or source text.
-    console.error('Replay generation failed. Check that the reviewed input exists and has valid redacted Events, analysis and redaction counts.');
-    process.exitCode = 1;
-  }
+  Promise.resolve().then(() => main(process.argv.slice(2)))
+    .catch(() => {
+      // Filesystem and JSON parser errors can contain private paths or source text.
+      console.error('Replay generation failed. Check that the reviewed input exists and has valid redacted Events, analysis and redaction counts.');
+      process.exitCode = 1;
+    });
 }
 
-module.exports = { generate, workflowInput, isIssueNumber };
+module.exports = { generate, generateDemo, workflowInput, isIssueNumber };

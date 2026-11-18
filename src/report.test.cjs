@@ -8,8 +8,11 @@ const { join } = require('node:path');
 const test = require('node:test');
 const { runInNewContext } = require('node:vm');
 const { buildReplay, renderIssueComment, sourceLink } = require('./report.cjs');
-const { generate, workflowInput } = require('./generate-replay.cjs');
-const { assignCopilot } = require('./assign-copilot.cjs');
+const { generate, generateDemo, workflowInput } = require('./generate-replay.cjs');
+const { assignCopilot, workflowArgs } = require('./assign-copilot.cjs');
+const { postIssueComment, workflowIssue } = require('./post-comment.cjs');
+const { buildDemoInput } = require('./demo.cjs');
+const { correlateEvents } = require('./correlate.cjs');
 
 const root = join(__dirname, '..');
 const repo = 'octobooth-19/incident-replay';
@@ -53,6 +56,15 @@ test('renders compact Markdown with exact evidence IDs, safe refs, and redaction
   assert.throws(() => buildReplay({
     ...fixture, events: [{ ...events[0], text: 'contact user@example.test' }],
   }), /requires already-redacted/);
+  const partial = buildReplay({
+    ...fixture,
+    warnings: ['GitHub collection incomplete: pull requests may be partial or omitted (HTTP 403).'],
+    omissions: ['pull requests'],
+  });
+  assert.match(renderIssueComment(partial), /Collection warnings[\s\S]*HTTP 403[\s\S]*Omitted sources: pull requests/);
+  assert.throws(() => buildReplay({
+    ...fixture, warnings: ['request failed with password=source-secret'],
+  }), /Invalid collection warnings/);
 });
 
 test('workflow command generates offline artifacts and public events cannot select private input', (t) => {
@@ -76,12 +88,38 @@ test('workflow command generates offline artifacts and public events cannot sele
   assert.equal(result.status, 0, result.stderr);
   const read = (file) => readFileSync(join(out, file), 'utf8');
   const replay = JSON.parse(read('replay.json'));
-  assert.equal(replay.hypotheses.length, 1);
-  assert.equal(replay.rejectedClaims, 2);
-  assert.match(read('issue-comment.md'), /blob\/[a-f0-9]{40}\/fixtures\/checkout-api\/quote\.cjs#L4/);
+  assert.equal(replay.hypotheses.length, 2);
+  assert.equal(replay.rejectedClaims, 0);
+  assert.match(read('issue-comment.md'), /blob\/[a-f0-9]{40}\/fixtures\/analysis\/checkout\.input\.json#L1/);
+  assert.match(read('issue-comment.md'), /Correlation[\s\S]*Error-rate increase/);
   for (const file of ['index.html', 'issue-comment.md', 'replay.json']) {
     assert.doesNotMatch(read(file), /user@example\.test|ignore raw issue data/);
   }
+});
+
+test('offline checkout demo collects and redacts fixtures through analysis, Markdown and viewer output', async (t) => {
+  const dir = scratch(t);
+  const demo = await buildDemoInput();
+  const correlation = correlateEvents(demo.events, demo.correlation);
+  assert.equal(correlation.changePoint.ts, '2026-11-18T13:02:00.000Z');
+  assert.equal(correlation.suspects[0].score, 1);
+  assert.deepEqual(correlation.suspects[0].matchedFiles, ['fixtures/checkout-api/quote.cjs']);
+  await generateDemo(dir, repo);
+  const replay = JSON.parse(readFileSync(join(dir, 'replay.json'), 'utf8'));
+  const markdown = readFileSync(join(dir, 'issue-comment.md'), 'utf8');
+  const html = readFileSync(join(dir, 'index.html'), 'utf8');
+  assert.equal(replay.events.length, 9);
+  assert.ok(replay.redactionReport.total > 0);
+  assert.equal(replay.hypotheses.length, 2);
+  assert.equal(replay.rejectedClaims, 0);
+  assert.equal(replay.correlation.changePoint.ts, '2026-11-18T13:02:00.000Z');
+  assert.equal(replay.correlation.suspects[0].score, 1);
+  assert.deepEqual(replay.events.map(({ ts }) => ts), [...replay.events.map(({ ts }) => ts)].sort());
+  assert.match(markdown, /Incident replay[\s\S]*Timeline[\s\S]*Hypotheses/);
+  assert.match(markdown, /Error-rate increase at \*\*2026-11-18T13:02:00\.000Z\*\*[\s\S]*Score 1/);
+  assert.match(markdown, /fixtures\/ingestion\/checkout\.jsonl/);
+  assert.match(html, /id="embedded-replay">/);
+  assert.doesNotMatch(JSON.stringify({ replay, markdown, html }), /buyer@example\.test|AKIA0000000000000000|github_pat_000000000000000000000000000000000000|fixture-secret/);
 });
 
 test('viewer embeds and displays hostile-looking data as text and supports scrub, citation and upload', async (t) => {
@@ -119,6 +157,7 @@ test('viewer embeds and displays hostile-looking data as text and supports scrub
   get('embedded-replay').textContent = embedded;
   runInNewContext(script, { document: { getElementById: get, createElement: node } });
   const scrub = get('scrub');
+  assert.match(get('correlation').textContent, /No qualifying error-rate increase/);
   assert.equal(scrub.max, '1');
   scrub.value = '1';
   scrub.events.input();
@@ -167,4 +206,50 @@ test('opt-in handoff uses the documented assignee endpoint only for a private, u
   privateRepo = false;
   await assert.rejects(assignCopilot(args), /requires a private/);
   assert.deepEqual(calls.map(({ options }) => options.method), ['GET']);
+});
+
+test('manual comment integration posts only generated Markdown and ignores issue-body content', async () => {
+  const calls = [];
+  const markdown = '## Incident replay\n\nFictional checkout evidence.';
+  await postIssueComment({
+    repo, issue: '42', markdown, token: 'mock-token',
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      return { ok: true };
+    },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `https://api.github.com/repos/${repo}/issues/42/comments`);
+  assert.equal(JSON.parse(calls[0].options.body).body, markdown);
+  assert.equal(workflowIssue('issues', issueEvent(true)), '42');
+  assert.equal(workflowIssue('workflow_dispatch', {
+    inputs: { issue_number: '42' }, issue: { body: 'must-not-be-read' },
+  }), '42');
+  assert.equal(workflowIssue('workflow_dispatch', { inputs: { issue_number: '' } }), '');
+  assert.throws(() => workflowIssue('issues', {
+    ...issueEvent(true), issue: { number: 42, body: 'private' }, label: { name: 'other' },
+  }));
+  await assert.rejects(postIssueComment({
+    repo, issue: '42', markdown, token: 'mock-token',
+    fetch: async () => new Response('body=must-not-be-echoed', { status: 403 }),
+  }), { message: 'Could not post the generated incident replay comment (HTTP 403)' });
+});
+
+test('manual handoff workflow requires a reviewed private input and explicit opt-in', (t) => {
+  const dir = scratch(t);
+  const path = join(dir, 'event.json');
+  const reportPath = join(dir, 'report.md');
+  writeFileSync(reportPath, 'Generated from the reviewed private replay input.');
+  writeFileSync(path, JSON.stringify({
+    inputs: {
+      assign_copilot: true, issue_number: '42', handoff_issue_number: '43',
+    },
+  }));
+  assert.deepEqual(workflowArgs(reportPath, {
+    GITHUB_EVENT_PATH: path, GITHUB_REPOSITORY: repo, COPILOT_ASSIGNMENT_TOKEN: 'mock-token',
+  }), {
+    repo, issue: '43', report: 'Generated from the reviewed private replay input.', token: 'mock-token',
+  });
+  writeFileSync(path, JSON.stringify({ inputs: { assign_copilot: 'false', issue_number: '42' } }));
+  assert.throws(() => workflowArgs(reportPath, { GITHUB_EVENT_PATH: path }), /explicit workflow handoff approval/);
 });

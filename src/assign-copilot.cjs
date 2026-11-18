@@ -58,15 +58,37 @@ async function assignCopilot({ repo, issue, report, token, fetch = globalThis.fe
   }
 }
 
+function workflowArgs(reportPath, env = process.env) {
+  const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, 'utf8'));
+  const inputs = event.inputs ?? {};
+  if ((inputs.assign_copilot !== true && inputs.assign_copilot !== 'true') || !isIssueNumber(inputs.issue_number) ||
+      !isIssueNumber(inputs.handoff_issue_number) || !reportPath) {
+    throw new Error('Expected explicit workflow handoff approval, reviewed source input and target issue');
+  }
+  return {
+    repo: env.GITHUB_REPOSITORY,
+    issue: inputs.handoff_issue_number,
+    report: readFileSync(reportPath, 'utf8'),
+    token: env.COPILOT_ASSIGNMENT_TOKEN,
+  };
+}
+
 if (require.main === module) {
   const [confirmation, repo, issue, path] = process.argv.slice(2);
-  if (confirmation !== '--reviewed' || !path) {
-    console.error('Usage: node src/assign-copilot.cjs --reviewed <owner/repo> <issue-number> <reviewed-report.md>');
+  let args;
+  try {
+    if (confirmation === '--workflow' && repo) args = workflowArgs(repo);
+    else if (confirmation === '--reviewed' && path) {
+      args = { repo, issue, report: readFileSync(path, 'utf8'), token: process.env.COPILOT_ASSIGNMENT_TOKEN };
+    } else {
+      throw new Error('Invalid handoff command');
+    }
+  } catch {
+    console.error('Copilot handoff requires explicit opt-in and reviewed evidence. Check the handoff input and token.');
     process.exitCode = 1;
-  } else {
-    Promise.resolve().then(() => assignCopilot({
-      repo, issue, report: readFileSync(path, 'utf8'), token: process.env.COPILOT_ASSIGNMENT_TOKEN,
-    })).then(() => console.log('GitHub confirmed the Copilot assignment. Check the handoff issue for the draft PR.'))
+  }
+  if (args) {
+    assignCopilot(args).then(() => console.log('GitHub confirmed the Copilot assignment. Check the handoff issue for the draft PR.'))
       .catch(() => {
         console.error('Copilot handoff failed or was not confirmed. Check the issue, private repository policy, and token before retrying.');
         process.exitCode = 1;
@@ -74,4 +96,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { assignCopilot };
+module.exports = { assignCopilot, workflowArgs };

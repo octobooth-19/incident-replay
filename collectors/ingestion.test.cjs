@@ -181,3 +181,125 @@ test('GitHub rejects invalid inputs before fetch and does not echo REST error bo
     ...options, since: until, fetch: async () => new Response('password=fixture-dummy', { status: 403 }),
   }), { message: 'GitHub REST request failed (HTTP 403)' });
 });
+
+test('GitHub collection honors page limits and returns an explicit safe partial result', async () => {
+  const result = await collectGitHub({
+    repo: 'example/checkout-api',
+    since: '2026-11-18T13:00:00Z',
+    until: '2026-11-18T14:00:00Z',
+    maxPages: 1,
+    fetch: async (url) => {
+      if (url.pathname.endsWith('/commits')) {
+        return Response.json([], { headers: { Link: '<https://api.github.com/ignored?page=2>; rel="next"' } });
+      }
+      return url.pathname.endsWith('/actions/runs')
+        ? Response.json({ workflow_runs: [] })
+        : Response.json([]);
+    },
+  });
+  assert.deepEqual(result.omissions, ['commits']);
+  assert.deepEqual(result.warnings, [
+    'GitHub collection incomplete: commits may be partial or omitted (page limit reached).',
+  ]);
+  assert.equal(result.events.length, 0);
+});
+
+test('GitHub retries rate limits within the budget and keeps response bodies out of warnings', async () => {
+  let commitCalls = 0;
+  const waits = [];
+  const result = await collectGitHub({
+    repo: 'example/checkout-api',
+    since: '2026-11-18T13:00:00Z',
+    until: '2026-11-18T14:00:00Z',
+    sleep: async (ms) => waits.push(ms),
+    fetch: async (url) => {
+      if (url.pathname.endsWith('/commits') && commitCalls++ === 0) {
+        return new Response('password=must-not-appear', { status: 429, headers: { 'Retry-After': '0' } });
+      }
+      return url.pathname.endsWith('/actions/runs')
+        ? Response.json({ workflow_runs: [] })
+        : Response.json([]);
+    },
+  });
+  assert.equal(commitCalls, 2);
+  assert.deepEqual(waits, [0]);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('GitHub bounds stalled requests and returns partial results with omission warnings', async () => {
+  let commitCalls = 0;
+  const result = await collectGitHub({
+    repo: 'example/checkout-api',
+    since: '2026-11-18T13:00:00Z',
+    until: '2026-11-18T14:00:00Z',
+    requestTimeoutMs: 5,
+    timeBudgetMs: 1_000,
+    sleep: async () => {},
+    fetch: async (url) => {
+      if (url.pathname.endsWith('/commits')) {
+        commitCalls++;
+        return new Promise(() => {});
+      }
+      return url.pathname.endsWith('/actions/runs')
+        ? Response.json({ workflow_runs: [] })
+        : Response.json([]);
+    },
+  });
+  assert.equal(commitCalls, 3);
+  assert.deepEqual(result.omissions, ['commits']);
+  assert.match(result.warnings[0], /request timeout/);
+  assert.doesNotMatch(JSON.stringify(result), /password|must-not-appear|Bearer/);
+});
+
+test('GitHub timeout also covers a stalled response body', async () => {
+  let bodyReads = 0;
+  const result = await collectGitHub({
+    repo: 'example/checkout-api',
+    since: '2026-11-18T13:00:00Z',
+    until: '2026-11-18T14:00:00Z',
+    requestTimeoutMs: 5,
+    timeBudgetMs: 1_000,
+    sleep: async () => {},
+    fetch: async (url) => {
+      if (url.pathname.endsWith('/commits')) {
+        return {
+          ok: true,
+          headers: new Headers(),
+          json: () => {
+            bodyReads++;
+            return new Promise(() => {});
+          },
+        };
+      }
+      return url.pathname.endsWith('/actions/runs')
+        ? Response.json({ workflow_runs: [] })
+        : Response.json([]);
+    },
+  });
+  assert.equal(bodyReads, 3);
+  assert.deepEqual(result.omissions, ['commits']);
+  assert.match(result.warnings[0], /request timeout/);
+});
+
+test('GitHub partial API errors are visible; failure of every source does not return an empty result', async () => {
+  const result = await collectGitHub({
+    repo: 'example/checkout-api',
+    since: '2026-11-18T13:00:00Z',
+    until: '2026-11-18T14:00:00Z',
+    fetch: async (url) => url.pathname.endsWith('/pulls')
+      ? new Response('token=source-body-must-not-leak', { status: 403 })
+      : url.pathname.endsWith('/actions/runs')
+        ? Response.json({ workflow_runs: [] })
+        : Response.json([]),
+  });
+  assert.deepEqual(result.omissions, ['pull requests']);
+  assert.match(result.warnings[0], /HTTP 403/);
+  assert.doesNotMatch(JSON.stringify(result), /source-body-must-not-leak|token=/);
+
+  await assert.rejects(collectGitHub({
+    repo: 'example/checkout-api',
+    since: '2026-11-18T13:00:00Z',
+    until: '2026-11-18T14:00:00Z',
+    fetch: async () => new Response('credential=not-an-error-message', { status: 403 }),
+  }), { message: 'GitHub REST request failed (HTTP 403)' });
+});
