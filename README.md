@@ -3,7 +3,7 @@
 Incident Replay collects, redacts, and correlates service events. It also
 prepares an analysis prompt and validates saved model responses locally.
 `fixtures/` holds the fictional `checkout-api` and replay examples.
-There is no live model caller, publication, or workflow automation.
+Replay reports are generated offline; there is no live incident-analysis model caller or Pages deployment.
 
 ## Validate records
 
@@ -169,6 +169,67 @@ echoing its content. Retained prose also passes through best-effort redaction.
 Resolved IDs establish that the cited records exist, not that they prove the
 claim. Golden tests replay local response snapshots in `fixtures/analysis/`;
 no test contacts a model.
+
+## Render a replay and review an issue comment
+
+```sh
+node src/generate-replay.cjs --demo /tmp/checkout-replay octobooth-19/incident-replay
+```
+
+Open the generated `index.html` directly in a browser, or open
+[`viewer/index.html`](viewer/index.html) and select the generated `replay.json`.
+No server or network connection is needed. Use the slider (including arrow keys),
+Previous/Next buttons, or a claim's Evidence buttons to open the corresponding event.
+`issue-comment.md` is a concise preview for manual posting **after review**. It
+preserves event IDs in citations and only links recognized same-repository GitHub
+references or paths tracked at the current Git commit (`path:line` and `path#Lline`
+are supported). Unrecognized refs, including local-only paths, remain text. Omit
+`owner/repo` to render without links.
+
+Replace `--demo` with a local input JSON file for a real replay. Its
+`events` must already be redacted, `redactionReport` is the collector's
+`{ total, counts }` (sum corresponding categories when combining collectors),
+and `analysis`, if present, is the saved response object described above.
+Optional `correlation` accepts the existing correlation options. Without
+analysis, the comment falls back to the event timeline and makes no hypotheses.
+Keep real inputs and outputs local unless approved for sharing; automated
+redaction cannot guarantee removal of all sensitive data.
+
+### GitHub Actions
+
+On the default branch, applying the `incident` label or manually dispatching
+**Incident replay** builds an Actions artifact containing the HTML, JSON, and
+Markdown. Enable Actions and create the `incident` label. A blank manual
+dispatch runs the fictional demo. A public repository runs **only** the
+fictional demo, even if an issue number is supplied. In a private repository,
+a numbered run uses `incidents/<issue-number>.json` from the default branch
+and fails if the input is missing. Only commit approved redacted input there
+if repository history and the Actions artifact's audience are both appropriate;
+otherwise use the local generator. The workflow never reads the issue body,
+posts the comment, assigns agents, or deploys to Pages. Artifacts expire after
+seven days.
+
+### Opt-in Copilot handoff
+
+Enable Copilot cloud agent for the repository and organization, and use an
+eligible GitHub user with write access. In a **private** repository, prepare a
+dedicated open handoff issue. Review its title, body, and comments so Copilot
+isn't given any raw incident context. Review the generated Markdown and trim it
+to the relevant redacted evidence (at most 16 KB). Then run:
+
+```sh
+# Set COPILOT_ASSIGNMENT_TOKEN in the environment first; do not commit it.
+node src/assign-copilot.cjs --reviewed owner/private-repo 123 /path/to/reviewed-report.md
+```
+
+This uses GitHub's [documented REST issue assignment](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-via-the-api#using-the-rest-api).
+Use a user token, not the Actions `GITHUB_TOKEN`. GitHub documents fine-grained
+PAT permissions of Metadata read and Actions, Contents, Issues, and Pull
+requests read/write (or `repo` for a classic PAT). The assignment asks Copilot
+to use only the reviewed excerpt as incident evidence, demonstrate a focused
+test failing against unchanged code, and propose a fix in a draft PR without
+merging. These are instructions, not access controls; the maintainer must
+review the PR and confirm the failing baseline and draft status.
 
 ## Reproduce the checkout regression
 

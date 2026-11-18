@@ -1,0 +1,26 @@
+{
+  "events": [
+    {
+      "id": "quote-deploy",
+      "ts": "2026-11-18T13:00:30.000Z",
+      "source": "deploy",
+      "service": "checkout-api",
+      "severity": "info",
+      "ref": "deploy:1",
+      "text": "Checkout deployed."
+    },
+    {
+      "id": "quote-error",
+      "ts": "2026-11-18T13:01:00.000Z",
+      "source": "log",
+      "service": "checkout-api",
+      "severity": "error",
+      "ref": "fixtures/checkout-api/quote.cjs:4",
+      "text": "Quote failed. Retry from [REDACTED_IP]."
+    }
+  ],
+  "redactionReport": {
+    "total": 1,
+    "counts": { "aws": 0, "github": 0, "secret": 0, "email": 0, "ip": 1, "card": 0, "entropy": 0 }
+  }
+}
