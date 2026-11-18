@@ -1,10 +1,8 @@
 'use strict';
 
 function quote(items) {
-  const subtotalCents = items.reduce(
-    (total, { unitPriceCents, quantity }) => total + unitPriceCents * quantity,
-    0,
-  );
+  const prices = items.map(({ unitPriceCents }) => unitPriceCents);
+  const subtotalCents = prices.reduce((total, price) => total + price, 0);
   const shippingCents = subtotalCents >= 5000 ? 0 : 500;
   return { subtotalCents, shippingCents, totalCents: subtotalCents + shippingCents };
 }
