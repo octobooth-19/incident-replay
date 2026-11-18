@@ -7,7 +7,10 @@ const { createRedactor } = require('../collectors/redact.cjs');
 
 const categories = Object.keys(createRedactor().report().counts);
 function buildReplay(input) {
-  const { events, correlation, analysis = { hypotheses: [], timeline: [] }, redactionReport } = input;
+  const {
+    events, correlation, analysis = { hypotheses: [], timeline: [] }, redactionReport,
+    warnings = [], omissions = [],
+  } = input;
   const counts = redactionReport?.counts;
   if (!counts || Object.keys(counts).length !== categories.length ||
       categories.some((key) => !Number.isSafeInteger(counts[key]) || counts[key] < 0)) {
@@ -17,7 +20,22 @@ function buildReplay(input) {
   if (!Number.isSafeInteger(total) || total !== redactionReport.total) {
     throw new TypeError('Invalid collector redaction total');
   }
-  const ordered = correlateEvents(events, correlation).events;
+  const safeWarnings = new Set([
+    'commits', 'pull requests', 'deployments', 'Actions runs',
+  ]);
+  const safeReasons = new Set([
+    'request timeout', 'time budget exhausted', 'page limit reached', 'invalid response',
+    'request or data validation error',
+  ]);
+  if (!Array.isArray(warnings) || warnings.some((warning) => typeof warning !== 'string' ||
+      !/^GitHub collection incomplete: (commits|pull requests|deployments|Actions runs) may be partial or omitted \((request timeout|time budget exhausted|page limit reached|HTTP \d+|invalid response|request or data validation error)\)\.$/.test(warning)) ||
+      !Array.isArray(omissions) || omissions.some((omission) => !safeWarnings.has(omission))) {
+    throw new TypeError('Invalid collection warnings');
+  }
+  if (warnings.some((warning) => !safeReasons.has(warning.match(/\((.*)\)\.$/)?.[1]) &&
+      !/\(HTTP \d+\)\.$/.test(warning))) throw new TypeError('Invalid collection warning reason');
+  const correlated = correlateEvents(events, correlation);
+  const ordered = correlated.events;
   const { hypotheses, timeline, rejected } = validateAnalysisResponse(JSON.stringify(analysis), ordered);
   return {
     version: 1,
@@ -27,6 +45,12 @@ function buildReplay(input) {
     hypotheses,
     redactionReport: { total, counts: Object.fromEntries(categories.map((key) => [key, counts[key]])) },
     rejectedClaims: rejected.length,
+    warnings: [...warnings],
+    omissions: [...omissions],
+    correlation: {
+      changePoint: correlated.changePoint,
+      suspects: correlated.suspects.map(({ score, evidenceIds }) => ({ score, evidenceIds })),
+    },
   };
 }
 
@@ -89,6 +113,19 @@ function renderIssueComment(replay, repository) {
   }
   if (timeline.length === 0) lines.push('No events recorded.');
   if (timeline.length > 10) lines.push(`- ${timeline.length - 10} more entries in the replay bundle.`);
+  lines.push('', '### Correlation');
+  if (replay.correlation?.changePoint) {
+    const { ts, baselineRate, rate, evidenceIds } = replay.correlation.changePoint;
+    lines.push(`- Error-rate increase at **${ts}** from ${Math.round(baselineRate * 100)}% to ${Math.round(rate * 100)}% — ${citations(evidenceIds)}.`);
+  } else {
+    lines.push('- No qualifying adjacent-bucket error-rate increase detected.');
+  }
+  if (replay.correlation?.suspects.length) {
+    lines.push(`- Deployment-linked candidates: ${replay.correlation.suspects.length}; scores count distinct changed files matching error stack frames.`);
+    for (const suspect of replay.correlation.suspects.slice(0, 5)) {
+      lines.push(`  - Score ${suspect.score} — ${citations(suspect.evidenceIds)}`);
+    }
+  }
   lines.push('', '### Hypotheses');
   for (const hypothesis of replay.hypotheses.slice(0, 5)) {
     lines.push(`- **${Math.round(hypothesis.confidence * 100)}%** ${escapeMarkdown(hypothesis.summary)} — ${citations(hypothesis.evidence_ids)}`);
@@ -98,6 +135,11 @@ function renderIssueComment(replay, repository) {
   const { total, counts } = replay.redactionReport;
   lines.push('', `**Ingestion redactions:** ${total} (${categories.map((key) => `${key}: ${counts[key]}`).join(', ')}).`);
   if (replay.rejectedClaims) lines.push(`Offline claims omitted for unknown evidence: ${replay.rejectedClaims}.`);
+  if (replay.warnings?.length) {
+    lines.push('', '### Collection warnings');
+    for (const warning of replay.warnings) lines.push(`- ${warning}`);
+    if (replay.omissions?.length) lines.push(`- Omitted sources: ${replay.omissions.join(', ')}.`);
+  }
   return `${lines.join('\n')}\n`;
 }
 

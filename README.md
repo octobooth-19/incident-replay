@@ -2,8 +2,9 @@
 
 Incident Replay collects, redacts, and correlates service events. It also
 prepares an analysis prompt and validates saved model responses locally.
-`fixtures/` holds the fictional `checkout-api` and replay examples.
-Replay reports are generated offline; there is no live incident-analysis model caller or Pages deployment.
+`fixtures/` holds the fictional `checkout-api` and replay examples. The demo,
+analysis validation, and report generation run offline; no live incident
+analysis model is called.
 
 ## Validate records
 
@@ -21,6 +22,10 @@ they resolve to events.
 ```sh
 node --test
 ```
+
+The suite currently has 39 tests. The complete fictional demo command shown
+below was measured locally with Node v26.13.1 using `/usr/bin/time -p`:
+`real 0.06`, `user 0.05`, `sys 0.01` seconds.
 
 ## Collect and redact events
 
@@ -145,6 +150,15 @@ files. Supply those as local, reviewed metadata in `deploymentChanges`, using
 Event IDs and already-redacted repository-relative file paths. No metadata is
 fetched and no commit is inferred from timing alone.
 
+GitHub collection uses at most 10 pages per endpoint, a 10-second request
+timeout, and a 30-second total time budget. It retries rate limits and transient
+server/network failures at most twice, honoring `Retry-After` within the time
+budget. When a source fails after another source completed, the result includes
+explicit `warnings` and `omissions`; already-collected pages may be retained and
+are marked partial. If no source completes, collection throws instead of
+returning an empty success-shaped result. Error and warning strings contain
+status/reason labels only, never response bodies or credentials.
+
 ## Prepare and validate offline analysis
 
 ```js
@@ -172,9 +186,19 @@ no test contacts a model.
 
 ## Render a replay and review an issue comment
 
+Run the complete fictional demo locally. It collects the JSONL, text-log, and
+alert fixtures, redacts them, adds fictional deployment/change metadata,
+correlates the events, validates the saved analysis response, and generates
+all three replay artifacts:
+
 ```sh
-node src/generate-replay.cjs --demo /tmp/checkout-replay octobooth-19/incident-replay
+node src/generate-replay.cjs --demo /tmp/incident-replay-demo octobooth-19/incident-replay
 ```
+
+The output contains `replay.json`, `index.html`, and `issue-comment.md`. The
+viewer shows the detected error-rate rise and deployment-linked candidate
+scores. Re-run the same command to reproduce the bundle. This is a local,
+fictional-fixture run; it uses no network, model, or real incident data.
 
 Open the generated `index.html` directly in a browser, or open
 [`viewer/index.html`](viewer/index.html) and select the generated `replay.json`.
@@ -192,30 +216,45 @@ Replace `--demo` with a local input JSON file for a real replay. Its
 and `analysis`, if present, is the saved response object described above.
 Optional `correlation` accepts the existing correlation options. Without
 analysis, the comment falls back to the event timeline and makes no hypotheses.
+When using GitHub API Events, also pass through the collector's `warnings` and
+`omissions` arrays so partial collection is shown in both the replay and comment.
 Keep real inputs and outputs local unless approved for sharing; automated
 redaction cannot guarantee removal of all sensitive data.
 
 ### GitHub Actions
 
-On the default branch, applying the `incident` label or manually dispatching
-**Incident replay** builds an Actions artifact containing the HTML, JSON, and
-Markdown. Enable Actions and create the `incident` label. A blank manual
-dispatch runs the fictional demo. A public repository runs **only** the
-fictional demo, even if an issue number is supplied. In a private repository,
-a numbered run uses `incidents/<issue-number>.json` from the default branch
-and fails if the input is missing. Only commit approved redacted input there
-if repository history and the Actions artifact's audience are both appropriate;
-otherwise use the local generator. The workflow never reads the issue body,
-posts the comment, assigns agents, or deploys to Pages. Artifacts expire after
-seven days.
+Enable Actions and create the `incident` label. On the default branch, applying
+that label generates the replay and posts only the generated, sanitized
+`issue-comment.md` to the same issue. The workflow never reads the issue body
+or comments. A manual dispatch can target an issue; a blank target runs only
+the fictional demo. A public repository always runs the fictional demo, even
+if an issue number is supplied. In a private repository, a numbered run uses
+`incidents/<issue-number>.json` from the default branch and fails if the input
+is missing. Review and redact that file before committing it; repository
+history, generated comments, and artifacts all retain incident data within
+their respective audiences.
+
+The comment has the issue's audience: it is public on public issues and visible
+to repository-authorized users on private issues. The downloadable Actions
+artifact contains the viewer and report files, is available to users with
+Actions read access, and expires after seven days. Issue comments follow the
+repository's normal issue retention and are not removed automatically.
+
+GitHub Pages is a separate manual-dispatch option, **off by default**. When
+enabled, it always builds and publishes the fictional demo only; issue inputs
+and private replay files are not used in that job. To use it, enable Pages with
+GitHub Actions as the build/deploy source and allow the workflow's `pages: write`
+and `id-token: write` job permissions. Pages visibility follows repository and
+GitHub plan settings; treat a public site as public data.
 
 ### Opt-in Copilot handoff
 
 Enable Copilot cloud agent for the repository and organization, and use an
-eligible GitHub user with write access. In a **private** repository, prepare a
-dedicated open handoff issue. Review its title, body, and comments so Copilot
-isn't given any raw incident context. Review the generated Markdown and trim it
-to the relevant redacted evidence (at most 16 KB). Then run:
+eligible GitHub user with write access. Handoff is never triggered by the
+`incident` label. For the CLI, in a **private** repository, prepare a dedicated
+open handoff issue. Review its title, body, and comments so Copilot isn't given
+any raw incident context. Review the generated Markdown and trim it to the
+relevant redacted evidence (at most 16 KB). Then run:
 
 ```sh
 # Set COPILOT_ASSIGNMENT_TOKEN in the environment first; do not commit it.
@@ -223,13 +262,65 @@ node src/assign-copilot.cjs --reviewed owner/private-repo 123 /path/to/reviewed-
 ```
 
 This uses GitHub's [documented REST issue assignment](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/cloud-agent/use-cloud-agent-via-the-api#using-the-rest-api).
-Use a user token, not the Actions `GITHUB_TOKEN`. GitHub documents fine-grained
-PAT permissions of Metadata read and Actions, Contents, Issues, and Pull
-requests read/write (or `repo` for a classic PAT). The assignment asks Copilot
-to use only the reviewed excerpt as incident evidence, demonstrate a focused
-test failing against unchanged code, and propose a fix in a draft PR without
-merging. These are instructions, not access controls; the maintainer must
-review the PR and confirm the failing baseline and draft status.
+Use a fine-grained user token scoped to only the private repository and store it
+as the repository Actions secret `COPILOT_ASSIGNMENT_TOKEN`; do not use or expose
+the workflow's `GITHUB_TOKEN`. GitHub documents Metadata read and Actions,
+Contents, Issues, and Pull requests read/write permissions for the assignment
+API. Avoid an organization-wide or classic token where the fine-grained
+permissions suffice.
+
+The manual workflow also has an explicit `assign_copilot` checkbox (default
+false) and a separate open `handoff_issue_number`. It requires a numbered,
+reviewed private input in `incidents/<issue-number>.json`; assignment uses only
+the generated `issue-comment.md` (at most 16 KB). Only the handoff step receives
+`COPILOT_ASSIGNMENT_TOKEN`; it requires a private repo, an open issue not
+already assigned, and the explicit manual control. Workflow-dispatch inputs
+contain no evidence text. The issue body is never read. Tests do not assign
+anyone. The assignment asks Copilot to use only the reviewed excerpt,
+demonstrate a focused test failing against unchanged code, and propose a fix
+in a draft PR without merging. These are instructions, not access controls; the
+maintainer must review the PR and confirm the failing baseline and draft status.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  F["Fictional checkout-api fixtures"] --> C["Local collectors"]
+  C --> R["Redaction + Event IDs"]
+  R --> K["Correlation"]
+  K --> A["Saved response validation"]
+  A --> G["Replay generator"]
+  G --> J["issue-comment.md"]
+  G --> V["Viewer + replay.json"]
+  W["Issue label or manual dispatch"] --> G
+  J --> I["Issue comment (generated Markdown only)"]
+  V --> AR["7-day Actions artifact"]
+  G -. "manual, default-off; demo only" .-> P["GitHub Pages"]
+  H["Separate handoff issue + reviewed excerpt"] -. "explicit manual opt-in" .-> CA["Copilot assignment API"]
+```
+
+## Timed demo storyboard
+
+This 60-second script is the fallback storyboard if a screen recording is not
+available. Use the generated bundle from the command above and keep the demo
+offline:
+
+| Time | Show |
+| --- | --- |
+| 0:00–0:08 | Run `node src/generate-replay.cjs --demo /tmp/incident-replay-demo octobooth-19/incident-replay`. |
+| 0:08–0:20 | Open `/tmp/incident-replay-demo/index.html`; point out the fictional checkout timeline and local-only viewer. |
+| 0:20–0:34 | Scrub to the error-rate rise and use an Evidence button to open its event in the drawer. |
+| 0:34–0:48 | Show the deployment-linked candidate score, then explain that correlation is heuristic, not causation. |
+| 0:48–1:00 | Open `issue-comment.md`; note that the comment is a generated preview and no issue or agent was contacted locally. |
+
+No live incident data, model call, issue creation, assignment, or deployment is
+part of the local demo. The macOS screen recorder failed in this environment
+and produced no video file; this storyboard is not a recording, and video
+capture remains outstanding.
+
+The workflow, Pages deployment, live comment posting, and Copilot assignment
+have not been exercised against GitHub. Posting and assignment endpoint tests
+use mocked REST responses; the local demo is fully offline.
 
 ## Reproduce the checkout regression
 

@@ -1,0 +1,1 @@
+{"ts":"2026-11-18T13:02:10Z","service":"checkout-api","severity":"error","signature":"quote.regression","text":"Quote failed after deployment.\n    at quote (fixtures/checkout-api/quote.cjs:4:2)"}

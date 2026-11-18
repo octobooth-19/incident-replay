@@ -34,6 +34,7 @@
   <main>
     <section class="panel" aria-labelledby="timeline-heading">
       <h2 id="timeline-heading">Timeline</h2>
+      <p id="correlation" role="status"></p>
       <label for="scrub">Scrub events</label>
       <input id="scrub" type="range" min="0" max="0" value="0" disabled>
       <div>
@@ -83,7 +84,8 @@
       const strings = (list) => Array.isArray(list) && list.every((item) => typeof item === 'string');
       if (data?.version !== 1 || !Array.isArray(data.events) || !Array.isArray(data.timeline) ||
           !Array.isArray(data.hypotheses) || !Number.isSafeInteger(data.redactionReport?.total) ||
-          data.redactionReport.total < 0) throw new Error('Invalid replay bundle');
+          data.redactionReport.total < 0 || (data.warnings !== undefined && !strings(data.warnings)) ||
+          (data.omissions !== undefined && !strings(data.omissions))) throw new Error('Invalid replay bundle');
       const ids = new Map();
       data.events.forEach((event, index) => {
         if (!event || !['id', 'ts', 'source', 'service', 'severity', 'ref', 'text'].every(
@@ -95,10 +97,23 @@
       });
       const claim = (item) => item && typeof item.summary === 'string' &&
         strings(item.evidence_ids) && item.evidence_ids.length > 0 && item.evidence_ids.every((id) => ids.has(id));
+      const correlation = data.correlation;
+      const validCorrelation = correlation === undefined || (correlation &&
+        Array.isArray(correlation.suspects) &&
+        correlation.suspects.every((item) => Number.isSafeInteger(item.score) && item.score >= 0 &&
+          claim({ summary: '', evidence_ids: item.evidenceIds })) &&
+        (correlation.changePoint === null || (correlation.changePoint &&
+          typeof correlation.changePoint.ts === 'string' &&
+          Number.isFinite(correlation.changePoint.baselineRate) &&
+          Number.isFinite(correlation.changePoint.rate) &&
+          claim({ summary: '', evidence_ids: correlation.changePoint.evidenceIds }))));
       if (!data.timeline.every((item) => claim(item) && typeof item.ts === 'string') ||
           !data.hypotheses.every((item) => claim(item) && typeof item.id === 'string' &&
             Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 &&
-            strings(item.unverified_assumptions) && strings(item.suspect_files))) throw new Error('Invalid replay claim');
+            strings(item.unverified_assumptions) && strings(item.suspect_files)) ||
+          !validCorrelation) {
+        throw new Error('Invalid replay claim');
+      }
       return ids;
     }
 
@@ -168,7 +183,13 @@
         hypotheses.append(item);
       }
       if (!replay.hypotheses.length) hypotheses.append(element('li', 'No evidence-backed hypotheses supplied.'));
-      status.textContent = `${replay.events.length} events loaded. Ingestion redactions: ${replay.redactionReport.total}.`;
+      const changePoint = replay.correlation?.changePoint;
+      byId('correlation').textContent = changePoint
+        ? `Error rate increased at ${changePoint.ts}; deployment-linked candidate scores: ${replay.correlation.suspects.map(({ score }) => score).join(', ') || 'none'}.`
+        : 'No qualifying error-rate increase detected.';
+      status.textContent = `${replay.events.length} events loaded. Ingestion redactions: ${replay.redactionReport.total}.` +
+        (replay.warnings?.length ? ` Collection warnings: ${replay.warnings.join(' ')}` : '') +
+        (replay.omissions?.length ? ` Omitted: ${replay.omissions.join(', ')}.` : '');
     }
 
     scrub.addEventListener('input', () => showEvent(Number(scrub.value)));
