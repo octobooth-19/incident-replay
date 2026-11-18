@@ -71,6 +71,7 @@
     const maxBytes = 5 * 1024 * 1024;
     let replay;
     let indexes;
+    let diffEvidence;
     let selected = 0;
     let uploadSequence = 0;
 
@@ -87,6 +88,7 @@
           data.redactionReport.total < 0 || (data.warnings !== undefined && !strings(data.warnings)) ||
           (data.omissions !== undefined && !strings(data.omissions))) throw new Error('Invalid replay bundle');
       const ids = new Map();
+      const evidenceIds = new Set();
       data.events.forEach((event, index) => {
         if (!event || !['id', 'ts', 'source', 'service', 'severity', 'ref', 'text'].every(
           (field) => typeof event[field] === 'string') || !event.id || ids.has(event.id) ||
@@ -94,19 +96,36 @@
           throw new Error('Invalid replay event');
         }
         ids.set(event.id, index);
+        evidenceIds.add(event.id);
       });
+      const diffs = new Map();
+      if (data.diffEvidence !== undefined && !Array.isArray(data.diffEvidence)) throw new Error('Invalid diff evidence');
+      for (const diff of data.diffEvidence ?? []) {
+        if (!diff || typeof diff.id !== 'string' || !/^diff-[a-f0-9]{64}$/.test(diff.id) ||
+            typeof diff.path !== 'string' || !diff.path || diff.path !== diff.path.trim() ||
+            diff.path.startsWith('/') || diff.path.includes('\\') || diff.path.includes(':') ||
+            diff.path.split('/').some((part) => !part || part === '.' || part === '..') ||
+            typeof diff.patch !== 'string' || !diff.patch || diff.patch.length > 64 * 1024 ||
+            diff.reviewed !== true || evidenceIds.has(diff.id) || diffs.has(diff.id)) {
+          throw new Error('Invalid diff evidence');
+        }
+        diffs.set(diff.id, diff);
+        evidenceIds.add(diff.id);
+      }
       const claim = (item) => item && typeof item.summary === 'string' &&
+        strings(item.evidence_ids) && item.evidence_ids.length > 0 && item.evidence_ids.every((id) => evidenceIds.has(id));
+      const eventClaim = (item) => item && typeof item.summary === 'string' &&
         strings(item.evidence_ids) && item.evidence_ids.length > 0 && item.evidence_ids.every((id) => ids.has(id));
       const correlation = data.correlation;
       const validCorrelation = correlation === undefined || (correlation &&
         Array.isArray(correlation.suspects) &&
         correlation.suspects.every((item) => Number.isSafeInteger(item.score) && item.score >= 0 &&
-          claim({ summary: '', evidence_ids: item.evidenceIds })) &&
+          eventClaim({ summary: '', evidence_ids: item.evidenceIds })) &&
         (correlation.changePoint === null || (correlation.changePoint &&
           typeof correlation.changePoint.ts === 'string' &&
           Number.isFinite(correlation.changePoint.baselineRate) &&
           Number.isFinite(correlation.changePoint.rate) &&
-          claim({ summary: '', evidence_ids: correlation.changePoint.evidenceIds }))));
+          eventClaim({ summary: '', evidence_ids: correlation.changePoint.evidenceIds }))));
       if (!data.timeline.every((item) => claim(item) && typeof item.ts === 'string') ||
           !data.hypotheses.every((item) => claim(item) && typeof item.id === 'string' &&
             Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 &&
@@ -114,7 +133,7 @@
           !validCorrelation) {
         throw new Error('Invalid replay claim');
       }
-      return ids;
+      return { ids, diffs };
     }
 
     function showEvent(index) {
@@ -140,13 +159,23 @@
       evidence.append(fields, element('pre', event.text));
     }
 
+    function showDiff(diff) {
+      evidence.replaceChildren();
+      if (!diff) return;
+      const fields = element('dl');
+      fields.append(element('dt', 'Reviewed suspect diff ID'), element('dd', diff.id),
+        element('dt', 'File'), element('dd', diff.path));
+      evidence.append(element('p', 'Reviewed, redacted diff hunk'), fields, element('pre', diff.patch));
+    }
+
     function addCitations(node, ids) {
       const links = element('div');
       for (const id of ids) {
         const button = element('button', `Evidence: ${id}`);
         button.type = 'button';
         button.addEventListener('click', () => {
-          showEvent(indexes.get(id));
+          if (indexes.has(id)) showEvent(indexes.get(id));
+          else showDiff(diffEvidence.get(id));
           byId('drawer').open = true;
           byId('drawer-heading').focus();
         });
@@ -156,7 +185,9 @@
     }
 
     function load(data) {
-      indexes = validate(data);
+      const validated = validate(data);
+      indexes = validated.ids;
+      diffEvidence = validated.diffs;
       replay = data;
       scrub.max = String(Math.max(0, replay.events.length - 1));
       scrub.disabled = replay.events.length < 2;
