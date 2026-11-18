@@ -6,6 +6,10 @@ explicitly enabled analysis request through the GitHub Copilot CLI.
 `fixtures/` holds the fictional `checkout-api` and replay examples. The demo,
 offline analysis validation, and report generation never call a model.
 
+## Author
+
+Kalpesh Panchal
+
 ## Validate records
 
 Use Node.js 20+; no install is needed. The [Event](src/schemas/event.schema.json)
