@@ -39,7 +39,7 @@ test('JSONL collection normalizes timestamps, keeps line refs, and redacts seede
     ['2026-11-18T13:02:03.000Z', 'error', `${file}:3`],
   ]);
   assert.equal(result.events[0].signature, 'quote.retry');
-  assert.equal(result.events[0].trace_id, '[REDACTED_GITHUB]');
+  assert.equal(Object.hasOwn(result.events[0], 'trace_id'), false);
   assert.deepEqual(await collectLogs(file, { service: 'checkout-api' }), result);
   assertSafe(result, [
     'buyer@example.test', '192.0.2.42', 'AKIA0000000000000000', 'ghp_000000000000000000000000000000000000',
@@ -67,6 +67,7 @@ test('alert fixtures redact service, signature, trace ID and message', async () 
   assert.equal(result.events.length, 1);
   assert.equal(result.events[0].source, 'alert');
   assert.equal(result.events[0].severity, 'critical');
+  assert.equal(Object.hasOwn(result.events[0], 'trace_id'), false);
   assert.match(result.events[0].ref, /alerts\.json#1$/);
   assertSafe(result, [
     'alerts@example.test', '198.51.100.55', 'github_pat_000000000000000000000000000000000000',
@@ -97,6 +98,18 @@ test('standalone redaction masks all free-form fields without editing its input'
   assertSafe(result, ['id@example.test', '::ffff:192.0.2.42', '4111 1111 1111 1111', 'token=token'],
     { email: 1, ip: 2, secret: 1, card: 1 });
   assert.equal(original.id, 'id@example.test');
+});
+
+test('distinct sensitive trace IDs are omitted rather than replaced with a shared key', () => {
+  const sensitive = ['Q7mK2sV9wX4nA6jB8rD5fH', 'D5fH9wX4nA6jB8rQ7mK2sV', 'prefix-buyer@example.test'];
+  const traces = [...sensitive, 'trace-12', 'trace-12'];
+  const result = redactEvents(traces.map((trace_id, index) => ({
+    id: `event-${index}`, source: 'log', ts: '2026-11-18T13:00:00Z', severity: 'warn',
+    service: 'checkout-api', ref: `checkout.jsonl:${index + 1}`, text: 'Checkout retry', trace_id,
+  })));
+  assert.deepEqual(result.events.map((event) => Object.hasOwn(event, 'trace_id')), [false, false, false, true, true]);
+  assert.deepEqual(result.events.slice(3).map((event) => event.trace_id), ['trace-12', 'trace-12']);
+  assertSafe(result, sensitive, { entropy: 2, email: 1 });
 });
 
 test('GitHub collection uses read-only REST, pages safely, and filters every kind by time', async () => {
@@ -149,8 +162,8 @@ test('GitHub collection uses read-only REST, pages safely, and filters every kin
   });
   assert.deepEqual(calls, ['commits:1', 'commits:2', 'pulls:1', 'deployments:1', 'actions/runs:1']);
   assert.deepEqual(result.events.map(({ source, signature }) => [source, signature]), [
-    ['commit', 'github.commit'], ['commit', 'github.pr.closed'], ['commit', 'github.pr.merged'],
-    ['commit', 'github.pr.opened'], ['deploy', 'github.deployment'], ['deploy', 'github.actions.run'],
+    ['commit', 'github.commit'], ['pr', 'github.pr.closed'], ['pr', 'github.pr.merged'],
+    ['pr', 'github.pr.opened'], ['deploy', 'github.deployment'], ['actions_run', 'github.actions.run'],
   ]);
   assert.equal(result.events[0].ref, `https://github.com/example/checkout-api/commit/${sha}`);
   assert.equal(result.events.at(-1).severity, 'error');

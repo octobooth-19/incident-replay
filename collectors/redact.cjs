@@ -98,8 +98,10 @@ function redactEvents(events) {
       // Only a canonical commit reference has a typed SHA, not arbitrary 40-character strings.
       const commitRef = field === 'ref' && event.signature === 'github.commit' &&
         /^(https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/commit\/)([a-f0-9]{40})$/i.exec(value);
-      safe[field] = field === 'ts' || field === 'source' || field === 'severity' ? value
+      const redacted = field === 'ts' || field === 'source' || field === 'severity' ? value
         : commitRef ? redactor.redact(commitRef[1]) + commitRef[2] : redactor.redact(value);
+      // A shared placeholder would make unrelated traces appear to be the same trace.
+      if (field !== 'trace_id' || redacted === value) safe[field] = redacted;
     }
     return safe;
   });

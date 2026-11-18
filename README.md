@@ -28,7 +28,11 @@ to the existing Event schema. The report contains a total and per-category
 replacement counts, never the original values. Collectors redact free-form
 fields including message text, service, signature, trace ID, and source
 reference before returning results. Event IDs are derived from redacted
-metadata. Keep source files local: the file collectors never make network
+metadata. If any part of a trace ID matches a redaction rule, the entire
+`trace_id` field is omitted and its matches still count in the report. Those
+events cannot be grouped by trace ID, but they will not falsely share a
+placeholder. Unchanged trace IDs remain available for grouping.
+Keep source files local: the file collectors never make network
 requests, and the GitHub collector only makes read-only REST requests using
 the repository and query parameters, not local fixture or log data.
 
@@ -93,9 +97,9 @@ const result = await collectGitHub({
 
 The window is inclusive. Commits from the default branch use committer
 time; pull requests emit opening and merge or unmerged-close events;
-deployments and Actions runs use creation time. The existing Event schema
-has no PR or Actions source: PR events use `commit`, while Actions runs
-use `deploy`. `github.*` signatures distinguish the event kinds. Results
+deployments and Actions runs use creation time. The Event sources are
+`commit`, `pr`, `deploy`, and `actions_run`, respectively. PR signatures
+distinguish opening, merging, and closing without a merge. Results
 are sorted by event time. The collector reads paginated repository metadata;
 it does not fetch Actions logs, artifacts, or deployment statuses. GitHub tests
 use mocked REST responses and make no live requests.

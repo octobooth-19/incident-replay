@@ -50,6 +50,12 @@ test('Event rejects invalid enums and optional field types', () => {
   ]);
 });
 
+test('Event accepts PRs and Actions runs as distinct sources alongside commits and deployments', () => {
+  for (const source of ['commit', 'pr', 'deploy', 'actions_run']) {
+    assert.deepEqual(validateEvent({ ...event, source }), { valid: true, errors: [] });
+  }
+});
+
 test('Event rejects malformed and impossible timestamps', () => {
   for (const ts of [
     '2026-02-29T14:02:11Z',

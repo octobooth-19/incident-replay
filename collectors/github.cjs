@@ -74,16 +74,16 @@ async function collectGitHub({
   }
   for await (const item of pages(`${api}/pulls`, { state: 'all', sort: 'created', direction: 'desc' }, { fetch, token })) {
     const ref = `${web}/pull/${numberRef(item.number)}`;
-    add(item.created_at, 'commit', 'github.pr.opened', ref, item.title);
-    if (item.merged_at) add(item.merged_at, 'commit', 'github.pr.merged', ref, item.title);
-    else if (item.closed_at) add(item.closed_at, 'commit', 'github.pr.closed', ref, item.title);
+    add(item.created_at, 'pr', 'github.pr.opened', ref, item.title);
+    if (item.merged_at) add(item.merged_at, 'pr', 'github.pr.merged', ref, item.title);
+    else if (item.closed_at) add(item.closed_at, 'pr', 'github.pr.closed', ref, item.title);
   }
   for await (const item of pages(`${api}/deployments`, {}, { fetch, token })) {
     add(item.created_at, 'deploy', 'github.deployment', `https://api.github.com${api}/deployments/${numberRef(item.id)}`,
       item.description || `Deployment to ${item.environment ?? 'unknown environment'}`);
   }
   for await (const item of pages(`${api}/actions/runs`, {}, { fetch, token, collection: 'workflow_runs' })) {
-    add(item.created_at, 'deploy', 'github.actions.run', `${web}/actions/runs/${numberRef(item.id)}`,
+    add(item.created_at, 'actions_run', 'github.actions.run', `${web}/actions/runs/${numberRef(item.id)}`,
       item.display_title ?? item.name, item.conclusion === 'failure' ? 'error' : 'info');
   }
   return finishEvents(events.sort((a, b) => compareTimestamps(a.ts, b.ts)));
