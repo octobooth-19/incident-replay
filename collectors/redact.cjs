@@ -39,9 +39,10 @@ function createRedactor() {
   const awsKey = /(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])/g;
   const githubKey = /(?:github_pat_|gh[pousr]_)[A-Za-z0-9_]{20,}/g;
   const rules = [
-    [/\b(aws_secret_access_key|aws_session_token|api[_-]?key|access[_-]?token|password|secret|token)["']?\s*[:=]\s*(?:"([^"]+)"|'([^']+)'|([^\s"',;&}\]]+))/gi,
+    [/\b(aws_secret_access_key|aws_session_token|api[_-]?key|access[_-]?token|password|secret|token)["']?\s*[:=]\s*(?:"([^"]+)"|'([^']+)'|(\[REDACTED_(?:AWS|GITHUB|SECRET|EMAIL|IP|CARD|ENTROPY)\](?=$|[\s"',;&}\]])|[^\s"',;&}\]]+))/gi,
       ([value, label, ...parts]) => {
         const key = parts.find((part) => part !== undefined);
+        if (/^\[REDACTED_(?:AWS|GITHUB|SECRET|EMAIL|IP|CARD|ENTROPY)\]$/.test(key)) return null;
         const kind = /^aws_/i.test(label) || /^(?:AKIA|ASIA)[A-Z0-9]{16}$/.test(key) ? 'aws'
           : /^(?:github_pat_|gh[pousr]_)/.test(key) ? 'github' : 'secret';
         const offset = value.lastIndexOf(key);
@@ -108,4 +109,4 @@ function redactEvents(events) {
   return { events: safeEvents, redactionReport: redactor.report() };
 }
 
-module.exports = { redactEvents };
+module.exports = { createRedactor, redactEvents };

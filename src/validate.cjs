@@ -2,6 +2,7 @@
 
 const eventSchema = require('./schemas/event.schema.json');
 const hypothesisSchema = require('./schemas/hypothesis.schema.json');
+const analysisSchema = require('./schemas/analysis.schema.json');
 
 const typeChecks = {
   object: (value) => value !== null && typeof value === 'object' && !Array.isArray(value),
@@ -10,8 +11,9 @@ const typeChecks = {
   number: Number.isFinite,
 };
 
-// Implements only the keywords used by the two Phase 0 schemas.
+// Implements only the keywords used by the repository's schemas.
 function check(schema, value, path, errors) {
+  if (schema.$ref === 'hypothesis.schema.json') schema = hypothesisSchema;
   const report = (message) => errors.push(`${path}: ${message}`);
   if (!typeChecks[schema.type](value)) {
     report(`must be of type ${schema.type}`);
@@ -70,4 +72,5 @@ function validate(schema, value) {
 module.exports = {
   validateEvent: (value) => validate(eventSchema, value),
   validateHypothesis: (value) => validate(hypothesisSchema, value),
+  validateAnalysis: (value) => validate(analysisSchema, value),
 };
