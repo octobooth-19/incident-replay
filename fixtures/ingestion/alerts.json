@@ -1,0 +1,11 @@
+[
+  {
+    "ts": "2026-11-18T13:03:00Z",
+    "service": "alerts@example.test",
+    "severity": "critical",
+    "text": "Queue saturation with credential Q7mK2sV9wX4nA6jB8rD5fH",
+    "signature": "queue.alert.198.51.100.55",
+    "trace_id": "github_pat_000000000000000000000000000000000000",
+    "details": { "not_retained": "sentinel-ignored-alert-field" }
+  }
+]
