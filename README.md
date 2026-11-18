@@ -1,8 +1,9 @@
 # Incident Replay
 
-Phase 1 adds ingestion and local redaction to the Phase 0 data contracts.
-`fixtures/` holds the fictional `checkout-api` and sample collector inputs.
-Correlation, analysis, publication, and workflows are not implemented.
+Incident Replay collects, redacts, and correlates service events. It also
+prepares an analysis prompt and validates saved model responses locally.
+`fixtures/` holds the fictional `checkout-api` and replay examples.
+There is no live model caller, publication, or workflow automation.
 
 ## Validate records
 
@@ -18,7 +19,7 @@ least one distinct evidence ID; validation checks the IDs' shape, not whether
 they resolve to events.
 
 ```sh
-node --test collectors/ingestion.test.cjs src/validate.test.cjs fixtures/checkout-api/quote.test.cjs
+node --test
 ```
 
 ## Collect and redact events
@@ -103,6 +104,71 @@ distinguish opening, merging, and closing without a merge. Results
 are sorted by event time. The collector reads paginated repository metadata;
 it does not fetch Actions logs, artifacts, or deployment statuses. GitHub tests
 use mocked REST responses and make no live requests.
+
+## Correlate an incident
+
+Pass reviewed, redacted collector Events to `correlateEvents` in
+[`src/correlate.cjs`](src/correlate.cjs). For example, given the combined
+Event array and the IDs of a known deployment and commit:
+
+```js
+const { correlateEvents } = require('./src/correlate.cjs');
+const replay = correlateEvents(events, {
+  sourceOffsetsMs: { alert: -250 }, // subtract 250 ms from a fast alert clock
+  deploymentChanges: [{ deploymentId, commitId, files: ['src/quote.js'] }],
+});
+```
+
+- `events` contains copies with corrected UTC timestamps, sorted by timestamp
+  then Event ID, preserving sub-millisecond precision. `normalizeEvents`
+  exposes just this step. IDs and original records are unchanged.
+- `errorClusters` groups error and critical log/alert Events by service and
+  signature. If no signature is provided, it uses the first message line
+  with numeric tokens and whitespace normalized. `traces` groups explicitly
+  present unmasked trace IDs across services; omitted IDs never match.
+- `buckets` counts error/critical Events as a share of all log/alert Events
+  in each populated UTC interval `[startMs, startMs + bucketMs)`. The default
+  bucket is one minute. `changePoint` marks the first boundary where the rate
+  rises by `minRateIncrease` (default 0.25), comparing adjacent populated
+  buckets with at least `minBucketEvents` (default 1) records each. Gaps do not
+  count as healthy baselines, and no qualifying rise returns `null`.
+- `suspects` scores commits explicitly linked to deployments strictly before
+  that boundary. Each distinct changed file matching a Node.js stack frame
+  from an error at or after the boundary in the deployed service adds one
+  point. Relative paths match exactly; absolute paths match by repository
+  path suffix. Ties favor newer deployments, then commit and deployment ID.
+  Only the best-ranked deployment per commit is returned. Ranking is a
+  heuristic, not evidence of causation.
+
+The GitHub collector does not provide deploy-to-commit links or changed
+files. Supply those as local, reviewed metadata in `deploymentChanges`, using
+Event IDs and already-redacted repository-relative file paths. No metadata is
+fetched and no commit is inferred from timing alone.
+
+## Prepare and validate offline analysis
+
+```js
+const { buildAnalysisPrompt, validateAnalysisResponse } = require('./src/analyze.cjs');
+const prompt = buildAnalysisPrompt(replay.events); // { system, user }, no request is sent
+const analysis = validateAnalysisResponse(savedResponseText, replay.events);
+```
+
+Only supply already-redacted Events and use the exact same evidence set for
+prompt construction and validation. The prompt builder applies the Phase 1
+checks again and rejects detectable unredacted fields, treating Phase 1's
+SHA-256 Event IDs as opaque identifiers. This check is not a substitute for
+reviewing the collector output. The prompt carries only Event data, not the
+deployment metadata or raw source records.
+
+The [analysis schema](src/schemas/analysis.schema.json) requires
+`hypotheses` and `timeline` arrays. Every claim must cite at least one distinct
+Event ID. Invalid JSON or a schema violation (including absent or empty
+citations) rejects the response. A well-formed claim that cites any unknown ID
+is removed and reported in `rejected` by array name and index without
+echoing its content. Retained prose also passes through best-effort redaction.
+Resolved IDs establish that the cited records exist, not that they prove the
+claim. Golden tests replay local response snapshots in `fixtures/analysis/`;
+no test contacts a model.
 
 ## Reproduce the checkout regression
 

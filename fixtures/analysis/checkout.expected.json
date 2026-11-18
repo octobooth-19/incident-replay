@@ -1,0 +1,28 @@
+{
+  "hypotheses": [
+    {
+      "id": "quote-regression",
+      "summary": "The quote change may be related to the error spike.",
+      "confidence": 0.75,
+      "evidence_ids": ["quote-deploy", "quote-error"],
+      "unverified_assumptions": ["The deployed code caused the failure."],
+      "suspect_files": ["src/quote.js"]
+    }
+  ],
+  "timeline": [
+    {
+      "ts": "2026-11-18T13:00:30.000Z",
+      "summary": "A checkout deployment was recorded.",
+      "evidence_ids": ["quote-deploy"]
+    },
+    {
+      "ts": "2026-11-18T13:01:00.000Z",
+      "summary": "Checkout logged a quote error.",
+      "evidence_ids": ["quote-error"]
+    }
+  ],
+  "rejected": [
+    { "kind": "hypotheses", "index": 1, "reason": "unknown_evidence" },
+    { "kind": "timeline", "index": 1, "reason": "unknown_evidence" }
+  ]
+}
