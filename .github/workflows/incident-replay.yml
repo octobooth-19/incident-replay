@@ -1,0 +1,35 @@
+name: Incident replay
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Private issue number with a reviewed replay input (blank runs the fictional demo)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    if: >-
+      github.ref_name == github.event.repository.default_branch &&
+      (github.event_name == 'workflow_dispatch' || github.event.label.name == 'incident')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Generate the replay and issue comment offline
+        run: node src/generate-replay.cjs --workflow "$RUNNER_TEMP/incident-replay" "$GITHUB_REPOSITORY"
+      - name: Upload downloadable replay
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: incident-replay
+          path: ${{ runner.temp }}/incident-replay/
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+  <title>Incident Replay</title>
+  <style>
+    :root { color-scheme: light dark; font: 1rem/1.5 system-ui, sans-serif; }
+    body { max-width: 76rem; margin: auto; padding: 1.5rem; }
+    h1 { margin-bottom: 0; }
+    h2 { font-size: 1.2rem; }
+    input[type=range] { width: 100%; margin-inline: 0; }
+    button { font: inherit; margin: .25rem .4rem .25rem 0; cursor: pointer; }
+    :focus-visible { outline: 3px solid Highlight; outline-offset: 3px; }
+    .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 1rem; }
+    .panel { border: 1px solid GrayText; border-radius: .75rem; padding: 1rem; min-width: 0; }
+    .panel h2 { margin-top: 0; }
+    summary { cursor: pointer; font-weight: bold; }
+    li { margin-block: .5rem; }
+    dd { margin-inline-start: 1rem; }
+    pre { white-space: pre-wrap; font: inherit; }
+    dd, pre, li, button { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Incident Replay</h1>
+    <p>Inspect a redacted timeline and the evidence behind each hypothesis. Files stay in this browser.</p>
+    <label for="upload">Open replay JSON</label>
+    <input id="upload" type="file" accept=".json,application/json">
+    <p id="status" role="status">Choose a generated replay bundle to get started.</p>
+  </header>
+  <main>
+    <section class="panel" aria-labelledby="timeline-heading">
+      <h2 id="timeline-heading">Timeline</h2>
+      <label for="scrub">Scrub events</label>
+      <input id="scrub" type="range" min="0" max="0" value="0" disabled>
+      <div>
+        <button id="previous" type="button" disabled>Previous event</button>
+        <button id="next" type="button" disabled>Next event</button>
+      </div>
+      <p id="position" aria-live="polite">No events loaded.</p>
+      <details>
+        <summary>Analysis timeline notes</summary>
+        <ol id="notes"></ol>
+      </details>
+    </section>
+    <div class="panels">
+      <details class="panel" id="drawer" open>
+        <summary id="drawer-heading">Evidence drawer</summary>
+        <div id="evidence"></div>
+      </details>
+      <section class="panel" aria-labelledby="hypotheses-heading">
+        <h2 id="hypotheses-heading">Hypotheses</h2>
+        <p>Confidence is an estimate, not proof.</p>
+        <ul id="hypotheses"></ul>
+      </section>
+    </div>
+  </main>
+  <script type="application/json" id="embedded-replay">null</script>
+  <script>
+    'use strict';
+    const byId = (id) => document.getElementById(id);
+    const scrub = byId('scrub');
+    const previous = byId('previous');
+    const next = byId('next');
+    const evidence = byId('evidence');
+    const status = byId('status');
+    const maxBytes = 5 * 1024 * 1024;
+    let replay;
+    let indexes;
+    let selected = 0;
+    let uploadSequence = 0;
+
+    function element(tag, text) {
+      const node = document.createElement(tag);
+      if (text !== undefined) node.textContent = text;
+      return node;
+    }
+
+    function validate(data) {
+      const strings = (list) => Array.isArray(list) && list.every((item) => typeof item === 'string');
+      if (data?.version !== 1 || !Array.isArray(data.events) || !Array.isArray(data.timeline) ||
+          !Array.isArray(data.hypotheses) || !Number.isSafeInteger(data.redactionReport?.total) ||
+          data.redactionReport.total < 0) throw new Error('Invalid replay bundle');
+      const ids = new Map();
+      data.events.forEach((event, index) => {
+        if (!event || !['id', 'ts', 'source', 'service', 'severity', 'ref', 'text'].every(
+          (field) => typeof event[field] === 'string') || !event.id || ids.has(event.id) ||
+          !['signature', 'trace_id'].every((field) => event[field] === undefined || typeof event[field] === 'string')) {
+          throw new Error('Invalid replay event');
+        }
+        ids.set(event.id, index);
+      });
+      const claim = (item) => item && typeof item.summary === 'string' &&
+        strings(item.evidence_ids) && item.evidence_ids.length > 0 && item.evidence_ids.every((id) => ids.has(id));
+      if (!data.timeline.every((item) => claim(item) && typeof item.ts === 'string') ||
+          !data.hypotheses.every((item) => claim(item) && typeof item.id === 'string' &&
+            Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 &&
+            strings(item.unverified_assumptions) && strings(item.suspect_files))) throw new Error('Invalid replay claim');
+      return ids;
+    }
+
+    function showEvent(index) {
+      selected = index;
+      const event = replay.events[index];
+      const label = event ? `${index + 1} of ${replay.events.length}: ${event.ts} | ${event.service} | ${event.severity}`
+        : 'No events recorded.';
+      scrub.value = String(index);
+      scrub.setAttribute('aria-valuetext', label);
+      byId('position').textContent = label;
+      previous.disabled = !event || index === 0;
+      next.disabled = !event || index >= replay.events.length - 1;
+      evidence.replaceChildren();
+      if (!event) return;
+      const fields = element('dl');
+      for (const [label, value] of [
+        ['Event ID', event.id], ['Source', event.source], ['Source reference', event.ref],
+        ['Timestamp', event.ts], ['Service', event.service], ['Severity', event.severity],
+        ['Signature', event.signature], ['Trace ID', event.trace_id],
+      ]) {
+        if (value !== undefined) fields.append(element('dt', label), element('dd', value));
+      }
+      evidence.append(fields, element('pre', event.text));
+    }
+
+    function addCitations(node, ids) {
+      const links = element('div');
+      for (const id of ids) {
+        const button = element('button', `Evidence: ${id}`);
+        button.type = 'button';
+        button.addEventListener('click', () => {
+          showEvent(indexes.get(id));
+          byId('drawer').open = true;
+          byId('drawer-heading').focus();
+        });
+        links.append(button);
+      }
+      node.append(links);
+    }
+
+    function load(data) {
+      indexes = validate(data);
+      replay = data;
+      scrub.max = String(Math.max(0, replay.events.length - 1));
+      scrub.disabled = replay.events.length < 2;
+      showEvent(0);
+      const notes = byId('notes');
+      notes.replaceChildren();
+      for (const note of replay.timeline) {
+        const item = element('li', `${note.ts} | ${note.summary}`);
+        addCitations(item, note.evidence_ids);
+        notes.append(item);
+      }
+      if (!replay.timeline.length) notes.append(element('li', 'No analysis notes supplied.'));
+      const hypotheses = byId('hypotheses');
+      hypotheses.replaceChildren();
+      for (const hypothesis of replay.hypotheses) {
+        const item = element('li');
+        item.append(element('strong', `${Math.round(hypothesis.confidence * 100)}% | ${hypothesis.summary}`),
+          element('p', `Hypothesis ID: ${hypothesis.id}`));
+        if (hypothesis.unverified_assumptions.length) {
+          item.append(element('p', `Unverified: ${hypothesis.unverified_assumptions.join('; ')}`));
+        }
+        if (hypothesis.suspect_files.length) item.append(element('p', `Suspect files: ${hypothesis.suspect_files.join(', ')}`));
+        addCitations(item, hypothesis.evidence_ids);
+        hypotheses.append(item);
+      }
+      if (!replay.hypotheses.length) hypotheses.append(element('li', 'No evidence-backed hypotheses supplied.'));
+      status.textContent = `${replay.events.length} events loaded. Ingestion redactions: ${replay.redactionReport.total}.`;
+    }
+
+    scrub.addEventListener('input', () => showEvent(Number(scrub.value)));
+    previous.addEventListener('click', () => showEvent(selected - 1));
+    next.addEventListener('click', () => showEvent(selected + 1));
+    byId('upload').addEventListener('change', async (event) => {
+      const sequence = ++uploadSequence;
+      const file = event.target.files[0];
+      if (!file) return;
+      try {
+        if (file.size > maxBytes) throw new Error('File too large');
+        const text = await file.text();
+        if (sequence === uploadSequence) load(JSON.parse(text));
+      } catch {
+        if (sequence === uploadSequence) status.textContent = 'Could not load a valid replay JSON file (maximum 5 MiB).';
+      }
+    });
+    try {
+      const embedded = JSON.parse(byId('embedded-replay').textContent);
+      if (embedded !== null) load(embedded);
+    } catch {
+      status.textContent = 'Could not load the embedded replay bundle.';
+    }
+  </script>
+</body>
+</html>
