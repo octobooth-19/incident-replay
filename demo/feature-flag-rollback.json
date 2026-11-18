@@ -1,0 +1,88 @@
+{
+  "events": [
+    {
+      "id": "queue-baseline",
+      "ts": "2026-06-10T16:30:10Z",
+      "source": "log",
+      "service": "delivery-worker",
+      "severity": "info",
+      "ref": "demo/worker.log:1",
+      "text": "A delivery job completed."
+    },
+    {
+      "id": "batch-enabled",
+      "ts": "2026-06-10T16:30:40Z",
+      "source": "flag",
+      "service": "delivery-worker",
+      "severity": "info",
+      "ref": "demo/flags:1",
+      "text": "The experimental batching flag was enabled."
+    },
+    {
+      "id": "queue-error",
+      "ts": "2026-06-10T16:31:15Z",
+      "source": "log",
+      "service": "delivery-worker",
+      "severity": "error",
+      "signature": "batch-processing-error",
+      "ref": "demo/worker.log:2",
+      "text": "A batch could not be processed."
+    },
+    {
+      "id": "batch-disabled",
+      "ts": "2026-06-10T16:33:00Z",
+      "source": "flag",
+      "service": "delivery-worker",
+      "severity": "info",
+      "ref": "demo/flags:2",
+      "text": "The experimental batching flag was disabled."
+    },
+    {
+      "id": "queue-recovery",
+      "ts": "2026-06-10T16:34:10Z",
+      "source": "log",
+      "service": "delivery-worker",
+      "severity": "info",
+      "ref": "demo/worker.log:3",
+      "text": "A delivery job completed after the flag was disabled."
+    }
+  ],
+  "analysis": {
+    "hypotheses": [
+      {
+        "id": "batch-flag",
+        "summary": "The batching flag may be related to the processing error.",
+        "confidence": 0.65,
+        "evidence_ids": ["batch-enabled", "queue-error", "batch-disabled", "queue-recovery"],
+        "unverified_assumptions": ["Disabling the flag restored normal processing."],
+        "suspect_files": []
+      }
+    ],
+    "timeline": [
+      {
+        "ts": "2026-06-10T16:30:40Z",
+        "summary": "Experimental batching was enabled.",
+        "evidence_ids": ["batch-enabled"]
+      },
+      {
+        "ts": "2026-06-10T16:31:15Z",
+        "summary": "A batch processing error was logged.",
+        "evidence_ids": ["queue-error"]
+      },
+      {
+        "ts": "2026-06-10T16:33:00Z",
+        "summary": "Experimental batching was disabled.",
+        "evidence_ids": ["batch-disabled"]
+      },
+      {
+        "ts": "2026-06-10T16:34:10Z",
+        "summary": "A subsequent delivery job completed.",
+        "evidence_ids": ["queue-recovery"]
+      }
+    ]
+  },
+  "redactionReport": {
+    "total": 0,
+    "counts": { "aws": 0, "github": 0, "secret": 0, "email": 0, "ip": 0, "card": 0, "entropy": 0 }
+  }
+}
