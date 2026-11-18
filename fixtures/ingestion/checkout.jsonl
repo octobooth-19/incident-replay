@@ -1,0 +1,3 @@
+{"timestamp":"2026-11-18T08:01:02.1234-05:00","level":"WARNING","message":"Checkout retry for buyer@example.test at 192.0.2.42 using AKIA0000000000000000","signature":"quote.retry","trace_id":"ghp_000000000000000000000000000000000000","ignored":"sentinel-ignored-json-field"}
+
+{"ts":"2026-11-18T13:02:03Z","severity":"error","text":"Card 4111-1111-1111-1111 rejected; key 0123456789abcdef0123456789abcdef","service":"checkout-api"}
