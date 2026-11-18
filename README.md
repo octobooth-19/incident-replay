@@ -1,10 +1,10 @@
 # Incident Replay
 
-Incident Replay collects, redacts, and correlates service events. It also
-prepares an analysis prompt and validates saved model responses locally.
+Incident Replay collects, redacts, and correlates service events. It can
+prepare an analysis prompt, validate saved model responses locally, or make an
+explicitly enabled analysis request through the GitHub Copilot CLI.
 `fixtures/` holds the fictional `checkout-api` and replay examples. The demo,
-analysis validation, and report generation run offline; no live incident
-analysis model is called.
+offline analysis validation, and report generation never call a model.
 
 ## Validate records
 
@@ -23,8 +23,8 @@ they resolve to events.
 node --test
 ```
 
-The suite currently has 39 tests. The complete fictional demo command shown
-below was measured locally with Node v26.13.1 using `/usr/bin/time -p`:
+The complete fictional demo command shown below was measured locally with Node
+v26.13.1 using `/usr/bin/time -p`:
 `real 0.06`, `user 0.05`, `sys 0.01` seconds.
 
 ## Collect and redact events
@@ -159,7 +159,7 @@ are marked partial. If no source completes, collection throws instead of
 returning an empty success-shaped result. Error and warning strings contain
 status/reason labels only, never response bodies or credentials.
 
-## Prepare and validate offline analysis
+## Prepare, validate, and optionally run analysis
 
 ```js
 const { buildAnalysisPrompt, validateAnalysisResponse } = require('./src/analyze.cjs');
@@ -171,18 +171,63 @@ Only supply already-redacted Events and use the exact same evidence set for
 prompt construction and validation. The prompt builder applies the Phase 1
 checks again and rejects detectable unredacted fields, treating Phase 1's
 SHA-256 Event IDs as opaque identifiers. This check is not a substitute for
-reviewing the collector output. The prompt carries only Event data, not the
-deployment metadata or raw source records.
+reviewing the collector output. The offline example carries only Event data,
+not deployment metadata or raw source records.
 
 The [analysis schema](src/schemas/analysis.schema.json) requires
 `hypotheses` and `timeline` arrays. Every claim must cite at least one distinct
-Event ID. Invalid JSON or a schema violation (including absent or empty
-citations) rejects the response. A well-formed claim that cites any unknown ID
-is removed and reported in `rejected` by array name and index without
-echoing its content. Retained prose also passes through best-effort redaction.
-Resolved IDs establish that the cited records exist, not that they prove the
-claim. Golden tests replay local response snapshots in `fixtures/analysis/`;
-no test contacts a model.
+evidence ID; offline snapshots use Event IDs, and opt-in analyses can also cite
+reviewed diff IDs. Invalid JSON or a schema violation (including absent or
+empty citations) rejects the response. A well-formed claim that cites any
+unknown ID is removed and reported in `rejected` by array name and index
+without echoing its content. Retained prose also passes through best-effort
+redaction. Resolved IDs establish that the cited records exist, not that they
+prove the claim. Golden tests replay local response snapshots in
+`fixtures/analysis/`; no test contacts a model.
+
+For an explicitly enabled live analysis, install and authenticate the GitHub
+Copilot CLI separately, then pass the complete correlation result and only
+reviewed, already-redacted diff hunks for files matched by local suspect
+ranking:
+
+```js
+const { analyzeWithCopilot } = require('./src/analyze.cjs');
+const analysis = await analyzeWithCopilot(replay, {
+  enabled: true,
+  model: 'gpt-6-astra', // optional; otherwise Copilot CLI chooses
+  suspectDiffs: [{
+    path: 'src/quote.cjs',
+    patch: '@@ -4,1 +4,1 @@\n- old total\n+ new total',
+    reviewed: true,
+  }],
+});
+```
+
+[GitHub Models inference has been retired](https://docs.github.com/en/github-models);
+the live adapter uses the supported
+Copilot CLI's non-interactive prompt mode. Calls are disabled unless
+`enabled: true` is supplied. The adapter runs from an empty temporary working
+directory, disables built-in MCP servers and custom instructions, and allows
+only the `ask_user` tool while disabling it with `--no-ask-user`. It passes the prompt through stdin
+rather than command-line arguments and sends the correlated Event records,
+correlation summary, and supplied reviewed diffs to Copilot. Copilot may retain
+session data under its own policies; review those policies before opting in.
+The CLI must be
+installed and authenticated already; the adapter does not install or update
+it, and it makes no request during the demo or report generation.
+
+Diffs must have `reviewed: true`, pass the collector's redaction checks, and
+match a locally ranked suspect file. Each patch is limited to 64 KiB, with
+256 KiB total across patches and 512 KiB for the full prompt. Each is assigned an opaque `diff-…`
+evidence ID. Claims that cite unknown evidence are omitted; suspect file paths
+are retained only when the hypothesis cites the reviewed diff for that exact
+path. Live results can be added to a replay input as `analysis`, alongside the
+same `correlation` options and `suspectDiffs` array. The generated viewer
+includes only those validated, reviewed hunks; clicking a diff evidence ID
+opens its exact path and patch in the evidence drawer. Nothing fetches a diff
+from GitHub, and the model's conclusions still require human review.
+The result includes a `rejected` list for claims removed during validation;
+review it before saving the `hypotheses` and `timeline` as `analysis`.
 
 ## Render a replay and review an issue comment
 

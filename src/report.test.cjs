@@ -13,6 +13,7 @@ const { assignCopilot, workflowArgs } = require('./assign-copilot.cjs');
 const { postIssueComment, workflowIssue } = require('./post-comment.cjs');
 const { buildDemoInput } = require('./demo.cjs');
 const { correlateEvents } = require('./correlate.cjs');
+const { prepareSuspectDiffs } = require('./analyze.cjs');
 
 const root = join(__dirname, '..');
 const repo = 'octobooth-19/incident-replay';
@@ -120,6 +121,53 @@ test('offline checkout demo collects and redacts fixtures through analysis, Mark
   assert.match(markdown, /fixtures\/ingestion\/checkout\.jsonl/);
   assert.match(html, /id="embedded-replay">/);
   assert.doesNotMatch(JSON.stringify({ replay, markdown, html }), /buyer@example\.test|AKIA0000000000000000|github_pat_000000000000000000000000000000000000|fixture-secret/);
+});
+
+test('reviewed suspect diff citations open the exact hunk in the evidence drawer', async (t) => {
+  const dir = scratch(t);
+  const input = join(dir, 'input.json');
+  const commentPath = join(dir, 'issue-comment.md');
+  const demo = await buildDemoInput();
+  const correlation = correlateEvents(demo.events, demo.correlation);
+  const path = correlation.suspects[0].matchedFiles[0];
+  const patch = '@@ -4,1 +4,1 @@\n- return quantity;\n+ return 1;';
+  const suspectDiffs = [{ path, patch, reviewed: true }];
+  const [diff] = prepareSuspectDiffs(suspectDiffs, correlation);
+  demo.suspectDiffs = suspectDiffs;
+  demo.analysis.hypotheses[0].evidence_ids.push(diff.id);
+  demo.analysis.hypotheses[0].suspect_files = [path];
+  writeFileSync(input, JSON.stringify(demo));
+  generate(input, dir);
+  const comment = readFileSync(commentPath, 'utf8');
+  const html = readFileSync(join(dir, 'index.html'), 'utf8');
+  assert.ok(comment.includes(`reviewed diff: ${path.replaceAll('/', '&#47;').replaceAll('-', '&#45;').replaceAll('.', '&#46;')}`));
+  assert.doesNotMatch(comment, /return quantity/);
+  const [, embedded] = /id="embedded-replay">([\s\S]*?)<\/script>/.exec(html);
+  const [, script] = /<script>([\s\S]*?)<\/script>/.exec(html);
+  const nodes = new Map();
+  function node(tag) {
+    return {
+      tag, children: [], events: {}, textContent: '',
+      append(...children) { this.children.push(...children); },
+      replaceChildren() { this.children = []; },
+      addEventListener(name, fn) { this.events[name] = fn; },
+      setAttribute(name, value) { this[name] = value; },
+      focus() { this.focused = true; },
+      set innerHTML(_) { assert.fail('Viewer must not set innerHTML'); },
+    };
+  }
+  const get = (id) => {
+    if (!nodes.has(id)) nodes.set(id, node(id));
+    return nodes.get(id);
+  };
+  get('embedded-replay').textContent = embedded;
+  runInNewContext(script, { document: { getElementById: get, createElement: node } });
+  const hypothesis = get('hypotheses').children[0];
+  const button = hypothesis.children.at(-1).children.find((item) => item.textContent === `Evidence: ${diff.id}`);
+  assert.ok(button);
+  button.events.click();
+  assert.equal(get('evidence').children.at(-1).textContent, patch);
+  assert.equal(get('evidence').children[1].children[3].textContent, path);
 });
 
 test('viewer embeds and displays hostile-looking data as text and supports scrub, citation and upload', async (t) => {

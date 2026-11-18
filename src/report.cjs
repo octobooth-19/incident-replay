@@ -1,6 +1,6 @@
 'use strict';
 
-const { validateAnalysisResponse } = require('./analyze.cjs');
+const { prepareSuspectDiffs, validateAnalysisResponse } = require('./analyze.cjs');
 const { correlateEvents } = require('./correlate.cjs');
 const { compareTimestamps, normalizeTimestamp } = require('../collectors/event.cjs');
 const { createRedactor } = require('../collectors/redact.cjs');
@@ -36,7 +36,11 @@ function buildReplay(input) {
       !/\(HTTP \d+\)\.$/.test(warning))) throw new TypeError('Invalid collection warning reason');
   const correlated = correlateEvents(events, correlation);
   const ordered = correlated.events;
-  const { hypotheses, timeline, rejected } = validateAnalysisResponse(JSON.stringify(analysis), ordered);
+  const suspectDiffs = input.suspectDiffs;
+  const diffEvidence = suspectDiffs === undefined ? undefined : prepareSuspectDiffs(suspectDiffs, correlated);
+  const { hypotheses, timeline, rejected } = validateAnalysisResponse(JSON.stringify(analysis), ordered, {
+    ...(suspectDiffs === undefined ? {} : { correlation: correlated, suspectDiffs }),
+  });
   return {
     version: 1,
     events: ordered,
@@ -47,6 +51,7 @@ function buildReplay(input) {
     rejectedClaims: rejected.length,
     warnings: [...warnings],
     omissions: [...omissions],
+    ...(diffEvidence?.length ? { diffEvidence } : {}),
     correlation: {
       changePoint: correlated.changePoint,
       suspects: correlated.suspects.map(({ score, evidenceIds }) => ({ score, evidenceIds })),
@@ -95,8 +100,11 @@ function escapeMarkdown(value, limit = 240) {
 
 function renderIssueComment(replay, repository) {
   const evidence = new Map(replay.events.map((event) => [event.id, event]));
+  const diffEvidence = new Map((replay.diffEvidence ?? []).map((diff) => [diff.id, diff]));
   const cite = (id) => {
     const event = evidence.get(id);
+    const diff = diffEvidence.get(id);
+    if (diff) return `${encodeMarkdown(id)} (reviewed diff: ${escapeMarkdown(diff.path)})`;
     const url = event && sourceLink(event, repository);
     const label = encodeMarkdown(id).replace(/[\s\u0000-\u001f\u007f]/g, (char) => `&#${char.charCodeAt(0)};`);
     return url ? `[${label}](<${url}>)`
@@ -134,7 +142,7 @@ function renderIssueComment(replay, repository) {
   if (replay.hypotheses.length > 5) lines.push(`- ${replay.hypotheses.length - 5} more hypotheses in the replay bundle.`);
   const { total, counts } = replay.redactionReport;
   lines.push('', `**Ingestion redactions:** ${total} (${categories.map((key) => `${key}: ${counts[key]}`).join(', ')}).`);
-  if (replay.rejectedClaims) lines.push(`Offline claims omitted for unknown evidence: ${replay.rejectedClaims}.`);
+  if (replay.rejectedClaims) lines.push(`Analysis claims omitted for unsupported evidence: ${replay.rejectedClaims}.`);
   if (replay.warnings?.length) {
     lines.push('', '### Collection warnings');
     for (const warning of replay.warnings) lines.push(`- ${warning}`);
